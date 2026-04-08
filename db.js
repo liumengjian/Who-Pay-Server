@@ -55,6 +55,8 @@ const Team = sequelize.define(
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     activityId: { type: DataTypes.INTEGER, allowNull: false },
     name: { type: DataTypes.STRING(128), allowNull: false },
+    inviteCode: { type: DataTypes.STRING(16), allowNull: false, unique: true },
+    creatorId: { type: DataTypes.STRING(32), allowNull: false },
   },
   { tableName: "teams" }
 );
@@ -82,6 +84,7 @@ const Payment = sequelize.define(
   {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     activityId: { type: DataTypes.INTEGER, allowNull: false },
+    teamId: { type: DataTypes.INTEGER, allowNull: false },
     userId: { type: DataTypes.STRING(32), allowNull: false },
     amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
     remark: { type: DataTypes.STRING(512), allowNull: false, defaultValue: "" },
@@ -103,15 +106,12 @@ const Counter = sequelize.define(
   { tableName: "counters" }
 );
 
+/**
+ * 仅校验数据库连接。表结构由仓库根目录下 sql/init.sql 创建与维护，
+ * 部署前请在 MySQL 中执行该脚本（云托管可在控制台 SQL 窗口或导入执行）。
+ */
 async function init() {
-  await Counter.sync({ alter: true });
-  await User.sync({ alter: true });
-  await AuthToken.sync({ alter: true });
-  await Activity.sync({ alter: true });
-  await Team.sync({ alter: true });
-  await TeamMember.sync({ alter: true });
-  await ActivityParticipant.sync({ alter: true });
-  await Payment.sync({ alter: true });
+  await sequelize.authenticate();
 }
 
 module.exports = {
