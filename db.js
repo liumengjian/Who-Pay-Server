@@ -15,7 +15,7 @@ const User = sequelize.define(
   {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     username: { type: DataTypes.STRING(64), allowNull: false, unique: true },
-    password: { type: DataTypes.STRING(64), allowNull: false },
+    password: { type: DataTypes.STRING(255), allowNull: false },
     nickName: { type: DataTypes.STRING(128), allowNull: false, defaultValue: "" },
     realName: { type: DataTypes.STRING(128), allowNull: false, defaultValue: "" },
     avatar: { type: DataTypes.TEXT("long"), allowNull: true },
@@ -37,6 +37,8 @@ const Activity = sequelize.define(
   {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     name: { type: DataTypes.STRING(128), allowNull: false },
+    slogan: { type: DataTypes.STRING(512), allowNull: false, defaultValue: "" },
+    avatar: { type: DataTypes.TEXT("long"), allowNull: true },
     inviteCode: { type: DataTypes.STRING(16), allowNull: false, unique: true },
     creatorId: { type: DataTypes.STRING(32), allowNull: false },
     status: {

@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS `counters` (
 CREATE TABLE IF NOT EXISTS `users` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `username` VARCHAR(64) NOT NULL,
-  `password` VARCHAR(64) NOT NULL COMMENT '前端 MD5 后的 32 位小写十六进制',
+  `password` VARCHAR(255) NOT NULL COMMENT '登录密码（明文存储，生产环境请改为哈希）',
   `nickName` VARCHAR(128) NOT NULL DEFAULT '',
   `realName` VARCHAR(128) NOT NULL DEFAULT '',
   `avatar` LONGTEXT NULL COMMENT '可为 base64 或 URL 字符串',
@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS `auth_tokens` (
 CREATE TABLE IF NOT EXISTS `activities` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `name` VARCHAR(128) NOT NULL,
+  `slogan` VARCHAR(512) NOT NULL DEFAULT '' COMMENT '活动宣言',
+  `avatar` LONGTEXT NULL COMMENT '活动头像：base64 或 URL',
   `inviteCode` VARCHAR(16) NOT NULL,
   `creatorId` VARCHAR(32) NOT NULL COMMENT '用户 id 字符串，或 admin',
   `status` ENUM('active', 'ended') NOT NULL DEFAULT 'active',

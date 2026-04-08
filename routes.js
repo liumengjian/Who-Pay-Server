@@ -169,6 +169,8 @@ async function buildActivityDetail(activityId) {
     activityInfo: {
       id: String(a.id),
       name: a.name,
+      slogan: a.slogan || "",
+      avatarUrl: a.avatar || "",
       inviteCode: a.inviteCode,
       creatorId: String(a.creatorId),
       status: a.status,
@@ -212,6 +214,8 @@ async function buildActivityPreview(activityId) {
     activityInfo: {
       id: String(a.id),
       name: a.name,
+      slogan: a.slogan || "",
+      avatarUrl: a.avatar || "",
       status: a.status,
       endTime: a.endTime,
     },
@@ -220,9 +224,35 @@ async function buildActivityPreview(activityId) {
   };
 }
 
+/** 我的活动列表：非创建者卡片用的团队与成员（无金额） */
+async function buildActivityTeamsMembersLite(activityId) {
+  const teams = await Team.findAll({ where: { activityId } });
+  const teamRows = [];
+  for (const team of teams) {
+    const tMembers = await TeamMember.findAll({ where: { teamId: team.id } });
+    const members = [];
+    for (const tm of tMembers) {
+      const uid = String(tm.userId);
+      const pub = await memberPublicFields(uid);
+      members.push({
+        userId: uid,
+        nickName: pub.nickName,
+        avatarUrl: pub.avatarUrl,
+      });
+    }
+    teamRows.push({
+      id: String(team.id),
+      name: team.name,
+      members,
+    });
+  }
+  return teamRows;
+}
+
 async function listActivitiesForUser(userId, status) {
+  const uidStr = String(userId);
   const parts = await ActivityParticipant.findAll({
-    where: { userId: String(userId) },
+    where: { userId: uidStr },
   });
   const ids = parts.map((p) => p.activityId);
   if (ids.length === 0) return [];
@@ -232,19 +262,34 @@ async function listActivitiesForUser(userId, status) {
   });
   const out = [];
   for (const act of activities) {
-    const teamCountRaw = await Team.count({ where: { activityId: act.id } });
-    const teamCount = Math.max(teamCountRaw, 1);
-    const totalAmount = await sumActivityTotal(act.id);
-    const shareAmount = totalAmount / teamCount;
     const pl = act.get({ plain: true });
-    out.push({
+    const isCreator = String(pl.creatorId || "") === uidStr;
+    const base = {
       _id: String(pl.id),
       name: pl.name,
-      inviteCode: pl.inviteCode,
-      totalAmount: Number(totalAmount.toFixed(2)),
-      shareAmount: Number(shareAmount.toFixed(2)),
+      slogan: pl.slogan || "",
+      avatarUrl: pl.avatar || "",
+      isCreator,
       endTime: pl.endTime,
-    });
+    };
+    if (isCreator) {
+      const teamCountRaw = await Team.count({ where: { activityId: act.id } });
+      const teamCount = Math.max(teamCountRaw, 1);
+      const totalAmount = await sumActivityTotal(act.id);
+      const shareAmount = totalAmount / teamCount;
+      out.push({
+        ...base,
+        inviteCode: pl.inviteCode,
+        totalAmount: Number(totalAmount.toFixed(2)),
+        shareAmount: Number(shareAmount.toFixed(2)),
+      });
+    } else {
+      const teams = await buildActivityTeamsMembersLite(act.id);
+      out.push({
+        ...base,
+        teams,
+      });
+    }
   }
   return out;
 }
@@ -265,13 +310,15 @@ function registerApiRoutes(router) {
   });
 
   router.post("/api/auth/login", async (ctx) => {
-    const { username, password } = ctx.request.body || {};
+    const body = ctx.request.body || {};
+    const username = String(body.username || body.account || "").trim();
+    const password = String(body.password || "");
     if (!username || !password) {
       fail(ctx, "请输入账号和密码");
       return;
     }
     const user = await User.findOne({
-      where: { username: String(username).trim() },
+      where: { username },
     });
     if (!user || user.password !== String(password)) {
       fail(ctx, "账号或密码错误");
@@ -288,18 +335,17 @@ function registerApiRoutes(router) {
 
   router.post("/api/auth/register", async (ctx) => {
     const body = ctx.request.body || {};
-    const username = String(body.username || "").trim();
+    const username = String(body.username || body.account || "").trim();
     const password = String(body.password || "");
     const nickName = String(body.nickName || "").trim();
-    const realName = String(body.realName || "").trim();
     const avatar = body.avatar != null ? String(body.avatar) : "";
 
     if (!username || !password) {
       fail(ctx, "请输入账号和密码");
       return;
     }
-    if (!nickName || !realName) {
-      fail(ctx, "请填写昵称和真名");
+    if (!nickName) {
+      fail(ctx, "请输入用户名");
       return;
     }
     const exists = await User.findOne({ where: { username } });
@@ -311,7 +357,7 @@ function registerApiRoutes(router) {
       username,
       password,
       nickName,
-      realName,
+      realName: "",
       avatar: avatar || null,
     });
     const token = newToken();
@@ -462,27 +508,48 @@ function registerApiRoutes(router) {
   });
 
   router.post("/api/activity/create", auth, async (ctx) => {
-    const { name } = ctx.request.body || {};
-    const n = String(name || "").trim();
+    const body = ctx.request.body || {};
+    const n = String(body.name || "").trim();
     if (!n) {
       fail(ctx, "请输入活动名称");
       return;
     }
-    const userId = ctx.state.userId;
-    const code = await uniqueGlobalInviteCode();
-    const act = await Activity.create({
-      name: n,
-      inviteCode: code,
-      creatorId: userId,
-      status: "active",
-    });
-    const existingPart = await ActivityParticipant.findOne({
-      where: { activityId: act.id, userId },
-    });
-    if (!existingPart) {
-      await ActivityParticipant.create({ activityId: act.id, userId });
+    const slogan = String(body.slogan || "").trim().slice(0, 512);
+    let avatar =
+      body.avatar != null && String(body.avatar).trim() !== ""
+        ? String(body.avatar).trim()
+        : "";
+    const userId = String(ctx.state.userId);
+    if (!avatar && userId !== "admin") {
+      const u = await User.findByPk(userId);
+      if (u && u.avatar) avatar = String(u.avatar);
     }
-    ctx.body = { activityId: String(act.id), inviteCode: act.inviteCode };
+    const avatarVal = avatar || null;
+    try {
+      const code = await uniqueGlobalInviteCode();
+      const act = await Activity.create({
+        name: n,
+        slogan,
+        avatar: avatarVal,
+        inviteCode: code,
+        creatorId: userId,
+        status: "active",
+      });
+      const existingPart = await ActivityParticipant.findOne({
+        where: { activityId: act.id, userId },
+      });
+      if (!existingPart) {
+        await ActivityParticipant.create({ activityId: act.id, userId });
+      }
+      ctx.body = { activityId: String(act.id), inviteCode: act.inviteCode };
+    } catch (err) {
+      console.error("activity/create", err);
+      const msg =
+        (err && err.errors && err.errors[0] && err.errors[0].message) ||
+        (err && err.message) ||
+        "创建活动失败";
+      fail(ctx, String(msg));
+    }
   });
 
   router.post("/api/activity/join", auth, async (ctx) => {
