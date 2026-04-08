@@ -109,11 +109,69 @@ const Counter = sequelize.define(
 );
 
 /**
- * 仅校验数据库连接。表结构由仓库根目录下 sql/init.sql 创建与维护，
- * 部署前请在 MySQL 中执行该脚本（云托管可在控制台 SQL 窗口或导入执行）。
+ * 与旧库或手工建表对齐：缺列则 ALTER，避免 Sequelize 查询报 Unknown column。
+ */
+async function ensureSchema() {
+  const qi = sequelize.getQueryInterface();
+  try {
+    let actCols = await qi.describeTable("activities");
+    if (!actCols.slogan) {
+      try {
+        await qi.addColumn("activities", "slogan", {
+          type: DataTypes.STRING(512),
+          allowNull: false,
+          defaultValue: "",
+        });
+        console.log("[db] 已补充列 activities.slogan");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+    actCols = await qi.describeTable("activities");
+    if (!actCols.avatar) {
+      try {
+        await qi.addColumn("activities", "avatar", {
+          type: DataTypes.TEXT("long"),
+          allowNull: true,
+        });
+        console.log("[db] 已补充列 activities.avatar");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+  } catch (e) {
+    console.error("[db] ensureSchema activities:", e.message);
+  }
+
+  try {
+    const [pwdRows] = await sequelize.query(`
+      SELECT CHARACTER_MAXIMUM_LENGTH AS len
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'users'
+        AND COLUMN_NAME = 'password'
+      LIMIT 1
+    `);
+    const len = pwdRows[0] && pwdRows[0].len != null ? Number(pwdRows[0].len) : null;
+    if (len != null && len > 0 && len < 255) {
+      await sequelize.query(
+        "ALTER TABLE \`users\` MODIFY COLUMN \`password\` VARCHAR(255) NOT NULL"
+      );
+      console.log("[db] 已扩展 users.password 为 VARCHAR(255)");
+    }
+  } catch (e) {
+    console.error("[db] ensureSchema users.password:", e.message);
+  }
+}
+
+/**
+ * 校验连接并在启动时补全已知缺失列（仍建议用 sql/init.sql 管理完整结构）。
  */
 async function init() {
   await sequelize.authenticate();
+  await ensureSchema();
 }
 
 module.exports = {

@@ -41,7 +41,14 @@ registerApiRoutes(router);
 const app = new Koa();
 app
   .use(logger())
-  .use(bodyParser())
+  .use(
+    bodyParser({
+      enableTypes: ["json", "form", "text"],
+      jsonLimit: "16mb",
+      formLimit: "16mb",
+      textLimit: "16mb",
+    })
+  )
   .use(router.routes())
   .use(router.allowedMethods());
 
