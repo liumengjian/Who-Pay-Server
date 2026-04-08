@@ -45,11 +45,13 @@ app
   .use(router.routes())
   .use(router.allowedMethods());
 
-const port = process.env.PORT || 80;
+/* 容器平台常见默认探针端口为 8080；须监听 0.0.0.0 以便集群内探测 */
+const port = Number(process.env.PORT) || 8080;
+const host = process.env.HOST || "0.0.0.0";
 async function bootstrap() {
   await initDB();
-  app.listen(port, () => {
-    console.log("启动成功", port);
+  app.listen(port, host, () => {
+    console.log("启动成功", host, port);
   });
 }
 bootstrap();
