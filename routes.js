@@ -426,16 +426,21 @@ function registerApiRoutes(router) {
       where: { status: "active" },
       order: [["id", "DESC"]],
     });
+    const uid = String(ctx.state.userId || "");
     const activities = [];
     for (const act of rows) {
       const teamCount = await Team.count({ where: { activityId: act.id } });
       const pl = act.get({ plain: true });
+      const isCreator = String(pl.creatorId || "") === uid;
       activities.push({
         _id: String(pl.id),
         id: String(pl.id),
         name: pl.name,
         status: pl.status,
         teamCount,
+        ...(isCreator && pl.inviteCode
+          ? { isCreator: true, inviteCode: pl.inviteCode }
+          : {}),
       });
     }
     ctx.body = { activities };
@@ -568,7 +573,7 @@ function registerApiRoutes(router) {
       fail(ctx, "活动已结束");
       return;
     }
-    const userId = ctx.state.userId;
+    const userId = String(ctx.state.userId);
     const already = await ActivityParticipant.findOne({
       where: { activityId: act.id, userId },
     });
@@ -647,7 +652,7 @@ function registerApiRoutes(router) {
       fail(ctx, "创建者不能退出活动，请先结束活动");
       return;
     }
-    const userId = ctx.state.userId;
+    const userId = String(ctx.state.userId);
     const teamIds = (await Team.findAll({ where: { activityId } })).map((t) => t.id);
     if (teamIds.length) {
       await TeamMember.destroy({
@@ -666,7 +671,7 @@ function registerApiRoutes(router) {
       fail(ctx, "参数不完整");
       return;
     }
-    const userId = ctx.state.userId;
+    const userId = String(ctx.state.userId);
     const act = await Activity.findByPk(aid);
     if (!act || act.status !== "active") {
       fail(ctx, "活动不存在或已结束");
@@ -685,7 +690,7 @@ function registerApiRoutes(router) {
       activityId: aid,
       name: tname,
       inviteCode: code,
-      creatorId: String(userId),
+      creatorId: userId,
     });
     await TeamMember.create({ teamId: team.id, userId });
     ctx.body = { teamId: String(team.id), inviteCode: team.inviteCode };
@@ -700,7 +705,7 @@ function registerApiRoutes(router) {
       fail(ctx, "请提供活动ID和6位团队邀请码");
       return;
     }
-    const userId = ctx.state.userId;
+    const userId = String(ctx.state.userId);
     const act = await Activity.findByPk(aid);
     if (!act || act.status !== "active") {
       fail(ctx, "活动不存在或已结束");
@@ -760,7 +765,7 @@ function registerApiRoutes(router) {
       fail(ctx, "创建者请使用「解散团队」");
       return;
     }
-    const userId = ctx.state.userId;
+    const userId = String(ctx.state.userId);
     await TeamMember.destroy({ where: { teamId, userId } });
     ctx.body = {};
   });
@@ -771,7 +776,7 @@ function registerApiRoutes(router) {
     const aid = parseInt(activityId, 10);
     const tid = parseInt(teamId, 10);
     const amt = parseFloat(amount);
-    const userId = ctx.state.userId;
+    const userId = String(ctx.state.userId);
     if (Number.isNaN(aid) || Number.isNaN(tid) || Number.isNaN(amt)) {
       fail(ctx, "参数无效");
       return;
@@ -902,9 +907,13 @@ function registerApiRoutes(router) {
       limit,
     });
     const actIds = [...new Set(list.map((p) => p.activityId))];
-    const activities = await Activity.findAll({ where: { id: { [Op.in]: actIds } } });
     const nameMap = {};
-    for (const a of activities) nameMap[a.id] = a.name;
+    if (actIds.length > 0) {
+      const activities = await Activity.findAll({
+        where: { id: { [Op.in]: actIds } },
+      });
+      for (const a of activities) nameMap[a.id] = a.name;
+    }
     ctx.body = {
       payments: list.map((p) => {
         const pl = p.get({ plain: true });

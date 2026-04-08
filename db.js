@@ -332,6 +332,57 @@ async function ensureSchema() {
   }
 
   try {
+    let payCols = await qi.describeTable("payments");
+    if (!payCols.teamId) {
+      try {
+        await qi.addColumn("payments", "teamId", {
+          type: DataTypes.INTEGER,
+          allowNull: false,
+          defaultValue: 0,
+        });
+        console.log("[db] 已补充列 payments.teamId");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+      payCols = await qi.describeTable("payments");
+    }
+    if (!payCols.createTime) {
+      try {
+        await qi.addColumn("payments", "createTime", {
+          type: DataTypes.DATE,
+          allowNull: false,
+          defaultValue: DataTypes.NOW,
+        });
+        console.log("[db] 已补充列 payments.createTime");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+      payCols = await qi.describeTable("payments");
+    }
+    if (!payCols.remark) {
+      try {
+        await qi.addColumn("payments", "remark", {
+          type: DataTypes.STRING(512),
+          allowNull: false,
+          defaultValue: "",
+        });
+        console.log("[db] 已补充列 payments.remark");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+  } catch (e) {
+    if (e && e.original && e.original.code === "ER_NO_SUCH_TABLE") {
+      /* 未建库时忽略 */
+    } else {
+      console.error("[db] ensureSchema payments:", e.message);
+    }
+  }
+
+  try {
     const [pwdRows] = await sequelize.query(`
       SELECT CHARACTER_MAXIMUM_LENGTH AS len
       FROM INFORMATION_SCHEMA.COLUMNS
