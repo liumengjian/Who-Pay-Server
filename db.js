@@ -1,4 +1,4 @@
-const { Sequelize, DataTypes } = require("sequelize");
+const { Sequelize, DataTypes, QueryTypes } = require("sequelize");
 
 const { MYSQL_USERNAME, MYSQL_PASSWORD, MYSQL_ADDRESS = "" } = process.env;
 const [host, port = "3306"] = MYSQL_ADDRESS.split(":");
@@ -108,6 +108,32 @@ const Counter = sequelize.define(
   { tableName: "counters" }
 );
 
+const INVITE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+function randomInviteCode6() {
+  let s = "";
+  for (let i = 0; i < 6; i++) {
+    s += INVITE_CHARS[Math.floor(Math.random() * INVITE_CHARS.length)];
+  }
+  return s;
+}
+
+async function pickUnusedGlobalInviteCode() {
+  for (let j = 0; j < 50; j++) {
+    const code = randomInviteCode6();
+    const rowsA = await sequelize.query(
+      "SELECT `id` FROM `activities` WHERE `inviteCode` = :code LIMIT 1",
+      { replacements: { code }, type: QueryTypes.SELECT }
+    );
+    const rowsT = await sequelize.query(
+      "SELECT `id` FROM `teams` WHERE `inviteCode` = :code LIMIT 1",
+      { replacements: { code }, type: QueryTypes.SELECT }
+    );
+    if (!rowsA.length && !rowsT.length) return code;
+  }
+  throw new Error("无法生成唯一邀请码");
+}
+
 /**
  * 与旧库或手工建表对齐：缺列则 ALTER，避免 Sequelize 查询报 Unknown column。
  */
@@ -141,8 +167,168 @@ async function ensureSchema() {
         if (code !== "ER_DUP_FIELDNAME") throw addErr;
       }
     }
+    actCols = await qi.describeTable("activities");
+    if (!actCols.inviteCode) {
+      try {
+        await qi.addColumn("activities", "inviteCode", {
+          type: DataTypes.STRING(16),
+          allowNull: true,
+        });
+        console.log("[db] 已补充列 activities.inviteCode");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+    actCols = await qi.describeTable("activities");
+    if (!actCols.creatorId) {
+      try {
+        await qi.addColumn("activities", "creatorId", {
+          type: DataTypes.STRING(32),
+          allowNull: true,
+        });
+        console.log("[db] 已补充列 activities.creatorId");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+    await sequelize.query(`
+      UPDATE \`activities\`
+      SET \`creatorId\` = 'legacy'
+      WHERE \`creatorId\` IS NULL OR TRIM(\`creatorId\`) = ''
+    `);
+    const needCodes = await sequelize.query(
+      `SELECT \`id\` FROM \`activities\` WHERE \`inviteCode\` IS NULL OR TRIM(\`inviteCode\`) = ''`,
+      { type: QueryTypes.SELECT }
+    );
+    for (const row of needCodes) {
+      const code = await pickUnusedGlobalInviteCode();
+      await sequelize.query(
+        `UPDATE \`activities\` SET \`inviteCode\` = :code WHERE \`id\` = :id`,
+        { replacements: { code, id: row.id } }
+      );
+    }
+    try {
+      await qi.changeColumn("activities", "inviteCode", {
+        type: DataTypes.STRING(16),
+        allowNull: false,
+      });
+    } catch (chErr) {
+      const c = chErr && chErr.original && chErr.original.code;
+      if (c !== "ER_INVALID_USE_OF_NULL" && c !== "ER_BAD_NULL_ERROR") throw chErr;
+    }
+    try {
+      await qi.changeColumn("activities", "creatorId", {
+        type: DataTypes.STRING(32),
+        allowNull: false,
+      });
+    } catch (chErr) {
+      const c = chErr && chErr.original && chErr.original.code;
+      if (c !== "ER_INVALID_USE_OF_NULL" && c !== "ER_BAD_NULL_ERROR") throw chErr;
+    }
+    try {
+      await qi.addIndex("activities", ["inviteCode"], {
+        unique: true,
+        name: "activities_invite_code_unique",
+      });
+      console.log("[db] 已添加 activities 邀请码唯一索引");
+    } catch (ixErr) {
+      const c = ixErr && ixErr.original && ixErr.original.code;
+      if (c !== "ER_DUP_KEYNAME" && c !== "ER_TABLE_EXISTS_ERROR") {
+        /* 1061 Duplicate key name */
+        const msg = String(ixErr.message || "");
+        if (!msg.includes("Duplicate key name") && !msg.includes("already exists")) throw ixErr;
+      }
+    }
   } catch (e) {
     console.error("[db] ensureSchema activities:", e.message);
+  }
+
+  try {
+    let teamCols = await qi.describeTable("teams");
+    if (!teamCols.inviteCode) {
+      try {
+        await qi.addColumn("teams", "inviteCode", {
+          type: DataTypes.STRING(16),
+          allowNull: true,
+        });
+        console.log("[db] 已补充列 teams.inviteCode");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+    teamCols = await qi.describeTable("teams");
+    if (!teamCols.creatorId) {
+      try {
+        await qi.addColumn("teams", "creatorId", {
+          type: DataTypes.STRING(32),
+          allowNull: true,
+        });
+        console.log("[db] 已补充列 teams.creatorId");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+    await sequelize.query(`
+      UPDATE \`teams\` t
+      INNER JOIN (
+        SELECT \`teamId\`, MIN(\`userId\`) AS \`firstUser\`
+        FROM \`team_members\`
+        GROUP BY \`teamId\`
+      ) m ON m.\`teamId\` = t.\`id\`
+      SET t.\`creatorId\` = m.\`firstUser\`
+      WHERE t.\`creatorId\` IS NULL OR TRIM(t.\`creatorId\`) = ''
+    `);
+    await sequelize.query(`
+      UPDATE \`teams\` SET \`creatorId\` = '0' WHERE \`creatorId\` IS NULL OR TRIM(\`creatorId\`) = ''
+    `);
+    const needTeamCodes = await sequelize.query(
+      `SELECT \`id\` FROM \`teams\` WHERE \`inviteCode\` IS NULL OR TRIM(\`inviteCode\`) = ''`,
+      { type: QueryTypes.SELECT }
+    );
+    for (const row of needTeamCodes) {
+      const code = await pickUnusedGlobalInviteCode();
+      await sequelize.query(
+        `UPDATE \`teams\` SET \`inviteCode\` = :code WHERE \`id\` = :id`,
+        { replacements: { code, id: row.id } }
+      );
+    }
+    try {
+      await qi.changeColumn("teams", "inviteCode", {
+        type: DataTypes.STRING(16),
+        allowNull: false,
+      });
+    } catch (chErr) {
+      const c = chErr && chErr.original && chErr.original.code;
+      if (c !== "ER_INVALID_USE_OF_NULL" && c !== "ER_BAD_NULL_ERROR") throw chErr;
+    }
+    try {
+      await qi.changeColumn("teams", "creatorId", {
+        type: DataTypes.STRING(32),
+        allowNull: false,
+      });
+    } catch (chErr) {
+      const c = chErr && chErr.original && chErr.original.code;
+      if (c !== "ER_INVALID_USE_OF_NULL" && c !== "ER_BAD_NULL_ERROR") throw chErr;
+    }
+    try {
+      await qi.addIndex("teams", ["inviteCode"], {
+        unique: true,
+        name: "teams_invite_code_unique",
+      });
+      console.log("[db] 已添加 teams 邀请码唯一索引");
+    } catch (ixErr) {
+      const c = ixErr && ixErr.original && ixErr.original.code;
+      if (c !== "ER_DUP_KEYNAME" && c !== "ER_TABLE_EXISTS_ERROR") {
+        const msg = String(ixErr.message || "");
+        if (!msg.includes("Duplicate key name") && !msg.includes("already exists")) throw ixErr;
+      }
+    }
+  } catch (e) {
+    console.error("[db] ensureSchema teams:", e.message);
   }
 
   try {
