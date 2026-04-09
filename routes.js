@@ -663,6 +663,46 @@ function registerApiRoutes(router) {
     ctx.body = {};
   });
 
+  /** 更新活动信息（仅创建者、进行中） */
+  router.put("/api/activity/:activityId", auth, async (ctx) => {
+    const activityId = parseInt(ctx.params.activityId, 10);
+    if (Number.isNaN(activityId)) {
+      fail(ctx, "活动不存在");
+      return;
+    }
+    const act = await Activity.findByPk(activityId);
+    if (!act) {
+      fail(ctx, "活动不存在");
+      return;
+    }
+    if (String(act.creatorId) !== String(ctx.state.userId)) {
+      fail(ctx, "只有创建者可修改活动");
+      return;
+    }
+    if (act.status !== "active") {
+      fail(ctx, "活动已结束，无法修改");
+      return;
+    }
+    const body = ctx.request.body || {};
+    if (body.name !== undefined) {
+      const n = String(body.name || "").trim();
+      if (!n) {
+        fail(ctx, "活动名称不能为空");
+        return;
+      }
+      act.name = n.slice(0, 128);
+    }
+    if (body.slogan !== undefined) {
+      act.slogan = String(body.slogan || "").trim().slice(0, 512);
+    }
+    if (body.avatar !== undefined) {
+      const av = String(body.avatar || "").trim();
+      act.avatar = av || null;
+    }
+    await act.save();
+    ctx.body = {};
+  });
+
   router.post("/api/team/create", auth, async (ctx) => {
     const { activityId, teamName } = ctx.request.body || {};
     const aid = parseInt(activityId, 10);
@@ -726,6 +766,42 @@ function registerApiRoutes(router) {
     }
     await TeamMember.create({ teamId: team.id, userId });
     ctx.body = { teamId: String(team.id) };
+  });
+
+  /** 修改团队名称（仅团队创建者、活动进行中） */
+  router.put("/api/team/:teamId", auth, async (ctx) => {
+    const teamId = parseInt(ctx.params.teamId, 10);
+    if (Number.isNaN(teamId)) {
+      fail(ctx, "团队不存在");
+      return;
+    }
+    const body = ctx.request.body || {};
+    const tname = String(body.teamName || body.name || "").trim();
+    if (!tname) {
+      fail(ctx, "请输入团队名称");
+      return;
+    }
+    const team = await Team.findByPk(teamId);
+    if (!team) {
+      fail(ctx, "团队不存在");
+      return;
+    }
+    if (String(team.creatorId) !== String(ctx.state.userId)) {
+      fail(ctx, "只有创建者可修改团队");
+      return;
+    }
+    const act = await Activity.findByPk(team.activityId);
+    if (!act || act.status !== "active") {
+      fail(ctx, "活动不存在或已结束");
+      return;
+    }
+    if (!(await assertParticipant(team.activityId, ctx.state.userId))) {
+      fail(ctx, "无权操作");
+      return;
+    }
+    team.name = tname.slice(0, 128);
+    await team.save();
+    ctx.body = {};
   });
 
   /** 15 解散团队 */
