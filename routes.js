@@ -1151,7 +1151,6 @@ function registerApiRoutes(router) {
   router.get("/api/application/list", auth, async (ctx) => {
     const userId = String(ctx.state.userId);
     const list = await Application.findAll({
-      where: { status: "pending" },
       order: [["createTime", "DESC"]],
     });
 
