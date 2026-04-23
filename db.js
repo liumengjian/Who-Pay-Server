@@ -401,10 +401,34 @@ async function ensureSchema() {
     }
   }
 
-  // applications 表自动补列
+  // applications 表：不存在则创建，存在则补列
   try {
-    const qi = sequelize.getQueryInterface();
-    let appCols = await qi.describeTable("applications");
+    let appCols;
+    try {
+      appCols = await qi.describeTable("applications");
+    } catch (descErr) {
+      const code = descErr && descErr.original && descErr.original.code;
+      if (code === "ER_NO_SUCH_TABLE") {
+        // 表不存在，先创建
+        await sequelize.query(`
+          CREATE TABLE IF NOT EXISTS \`applications\` (
+            \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+            \`activityId\` INT NOT NULL,
+            \`targetType\` ENUM('activity','team') NOT NULL DEFAULT 'activity',
+            \`targetId\` INT NULL,
+            \`applicantId\` VARCHAR(32) NOT NULL,
+            \`status\` ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+            \`createTime\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX \`idx_activity\` (\`activityId\`),
+            INDEX \`idx_applicant\` (\`applicantId\`)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        `);
+        console.log("[db] 已建表 applications");
+        appCols = {};
+      } else {
+        throw descErr;
+      }
+    }
     if (!appCols.activityId) {
       try {
         await qi.addColumn("applications", "activityId", {
