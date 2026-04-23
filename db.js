@@ -95,6 +95,25 @@ const Payment = sequelize.define(
   { tableName: "payments", updatedAt: false, createdAt: false }
 );
 
+/** 申请记录（活动/团队） */
+const Application = sequelize.define(
+  "Application",
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    activityId: { type: DataTypes.INTEGER, allowNull: false },
+    targetType: { type: DataTypes.ENUM("activity", "team"), allowNull: false },
+    targetId: { type: DataTypes.INTEGER, allowNull: true },
+    applicantId: { type: DataTypes.STRING(32), allowNull: false },
+    status: {
+      type: DataTypes.ENUM("pending", "approved", "rejected"),
+      allowNull: false,
+      defaultValue: "pending",
+    },
+    createTime: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
+  },
+  { tableName: "applications", updatedAt: false, createdAt: false }
+);
+
 /** 云托管演示首页计数器 */
 const Counter = sequelize.define(
   "Counter",
@@ -382,6 +401,99 @@ async function ensureSchema() {
     }
   }
 
+  // applications 表自动补列
+  try {
+    const qi = sequelize.getQueryInterface();
+    let appCols = await qi.describeTable("applications");
+    if (!appCols.activityId) {
+      try {
+        await qi.addColumn("applications", "activityId", {
+          type: DataTypes.INTEGER,
+          allowNull: false,
+          defaultValue: 0,
+        });
+        console.log("[db] 已补充列 applications.activityId");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+    appCols = await qi.describeTable("applications");
+    if (!appCols.targetType) {
+      try {
+        await qi.addColumn("applications", "targetType", {
+          type: DataTypes.ENUM("activity", "team"),
+          allowNull: false,
+          defaultValue: "activity",
+        });
+        console.log("[db] 已补充列 applications.targetType");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+    appCols = await qi.describeTable("applications");
+    if (!appCols.targetId) {
+      try {
+        await qi.addColumn("applications", "targetId", {
+          type: DataTypes.INTEGER,
+          allowNull: true,
+        });
+        console.log("[db] 已补充列 applications.targetId");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+    appCols = await qi.describeTable("applications");
+    if (!appCols.applicantId) {
+      try {
+        await qi.addColumn("applications", "applicantId", {
+          type: DataTypes.STRING(32),
+          allowNull: false,
+        });
+        console.log("[db] 已补充列 applications.applicantId");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+    appCols = await qi.describeTable("applications");
+    if (!appCols.status) {
+      try {
+        await qi.addColumn("applications", "status", {
+          type: DataTypes.ENUM("pending", "approved", "rejected"),
+          allowNull: false,
+          defaultValue: "pending",
+        });
+        console.log("[db] 已补充列 applications.status");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+    appCols = await qi.describeTable("applications");
+    if (!appCols.createTime) {
+      try {
+        await qi.addColumn("applications", "createTime", {
+          type: DataTypes.DATE,
+          allowNull: false,
+          defaultValue: DataTypes.NOW,
+        });
+        console.log("[db] 已补充列 applications.createTime");
+      } catch (addErr) {
+        const code = addErr && addErr.original && addErr.original.code;
+        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+      }
+    }
+  } catch (e) {
+    if (e && e.original && e.original.code === "ER_NO_SUCH_TABLE") {
+      /* 表不存在时忽略，创建由 Migration/SQL 完成 */
+    } else {
+      console.error("[db] ensureSchema applications:", e.message);
+    }
+  }
+
   try {
     const [pwdRows] = await sequelize.query(`
       SELECT CHARACTER_MAXIMUM_LENGTH AS len
@@ -422,4 +534,5 @@ module.exports = {
   TeamMember,
   ActivityParticipant,
   Payment,
+  Application,
 };

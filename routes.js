@@ -8,6 +8,7 @@ const {
   TeamMember,
   ActivityParticipant,
   Payment,
+  Application,
 } = require("./db");
 const auth = require("./middleware/auth");
 
@@ -1035,6 +1036,221 @@ function registerApiRoutes(router) {
         };
       }),
     };
+  });
+
+  /** 获取活动下所有支付记录（按日期分组用） */
+  router.get("/api/payment/activity/:activityId", auth, async (ctx) => {
+    const activityId = parseInt(ctx.params.activityId, 10);
+    if (Number.isNaN(activityId)) {
+      fail(ctx, "参数无效");
+      return;
+    }
+    if (!(await assertParticipant(activityId, ctx.state.userId))) {
+      fail(ctx, "无权查看");
+      return;
+    }
+    const list = await Payment.findAll({
+      where: { activityId },
+      order: [["createTime", "DESC"]],
+    });
+    const userIds = [...new Set(list.map((p) => String(p.userId)))];
+    const userMap = {};
+    for (const uid of userIds) {
+      const pub = await memberPublicFields(uid);
+      userMap[uid] = pub;
+    }
+    ctx.body = {
+      payments: list.map((p) => {
+        const pl = p.get({ plain: true });
+        const user = userMap[pl.userId] || { nickName: "未知", avatarUrl: "" };
+        return {
+          _id: String(pl.id),
+          id: String(pl.id),
+          teamId: String(pl.teamId),
+          userId: String(pl.userId),
+          payerName: user.nickName,
+          avatarUrl: user.avatarUrl,
+          amount: parseFloat(pl.amount),
+          remark: pl.remark,
+          createTime: pl.createTime,
+        };
+      }),
+    };
+  });
+
+  /** ========== 申请相关 ========== */
+
+  /** 提交申请（活动/团队） */
+  router.post("/api/application/apply", auth, async (ctx) => {
+    const { activityId, targetType, targetId } = ctx.request.body || {};
+    const aid = parseInt(activityId, 10);
+    if (Number.isNaN(aid)) {
+      fail(ctx, "缺少活动ID");
+      return;
+    }
+    const type = String(targetType || "activity").trim();
+    if (type !== "activity" && type !== "team") {
+      fail(ctx, "目标类型无效");
+      return;
+    }
+    const act = await Activity.findByPk(aid);
+    if (!act) {
+      fail(ctx, "活动不存在");
+      return;
+    }
+    if (act.status !== "active") {
+      fail(ctx, "活动已结束");
+      return;
+    }
+    const userId = String(ctx.state.userId);
+
+    // 检查是否已是参与者
+    const already = await ActivityParticipant.findOne({
+      where: { activityId: aid, userId },
+    });
+    if (already) {
+      fail(ctx, "您已是活动成员，无需申请");
+      return;
+    }
+
+    // 检查是否有待处理申请
+    const existing = await Application.findOne({
+      where: { activityId: aid, applicantId: userId, status: "pending" },
+    });
+    if (existing) {
+      fail(ctx, "您已有待处理的申请");
+      return;
+    }
+
+    const app = await Application.create({
+      activityId: aid,
+      targetType: type,
+      targetId: type === "team" ? parseInt(targetId, 10) : null,
+      applicantId: userId,
+      status: "pending",
+    });
+    ctx.body = { applicationId: String(app.id) };
+  });
+
+  /** 查询发给创建者的申请列表 */
+  router.get("/api/application/list", auth, async (ctx) => {
+    const userId = String(ctx.state.userId);
+    const list = await Application.findAll({
+      where: { status: "pending" },
+      order: [["createTime", "DESC"]],
+    });
+
+    // 只返回目标创建者是当前用户的申请
+    const filtered = [];
+    for (const app of list) {
+      let isTargetCreator = false;
+      if (app.targetType === "activity") {
+        const act = await Activity.findByPk(app.activityId);
+        if (act && String(act.creatorId) === userId) {
+          isTargetCreator = true;
+        }
+      } else if (app.targetType === "team") {
+        const team = await Team.findByPk(app.targetId);
+        if (team && String(team.creatorId) === userId) {
+          isTargetCreator = true;
+        }
+      }
+      if (isTargetCreator) {
+        filtered.push(app);
+      }
+    }
+
+    // 补充活动/团队名称和申请人信息
+    const out = [];
+    for (const app of filtered) {
+      const applicantInfo = await memberPublicFields(app.applicantId);
+      let targetName = "";
+      if (app.targetType === "activity") {
+        const act = await Activity.findByPk(app.activityId);
+        targetName = act ? act.name : "";
+      } else {
+        const team = await Team.findByPk(app.targetId);
+        targetName = team ? team.name : "";
+      }
+      const pl = app.get({ plain: true });
+      out.push({
+        _id: String(pl.id),
+        id: String(pl.id),
+        activityId: String(pl.activityId),
+        targetType: pl.targetType,
+        targetId: pl.targetId ? String(pl.targetId) : "",
+        applicantId: String(pl.applicantId),
+        applicantName: applicantInfo.nickName,
+        applicantAvatar: applicantInfo.avatarUrl,
+        targetName,
+        status: pl.status,
+        createTime: pl.createTime,
+      });
+    }
+    ctx.body = { applications: out };
+  });
+
+  /** 处理申请（同意/拒绝） */
+  router.post("/api/application/handle", auth, async (ctx) => {
+    const { applicationId, action } = ctx.request.body || {};
+    const aid = parseInt(applicationId, 10);
+    if (Number.isNaN(aid)) {
+      fail(ctx, "申请ID无效");
+      return;
+    }
+    const act = String(action || "").trim().toLowerCase();
+    if (act !== "approve" && act !== "reject") {
+      fail(ctx, "操作无效，请使用 approve 或 reject");
+      return;
+    }
+    const app = await Application.findByPk(aid);
+    if (!app) {
+      fail(ctx, "申请不存在");
+      return;
+    }
+    if (app.status !== "pending") {
+      fail(ctx, "申请已被处理");
+      return;
+    }
+
+    // 验证创建者权限
+    const userId = String(ctx.state.userId);
+    let isCreator = false;
+    if (app.targetType === "activity") {
+      const act2 = await Activity.findByPk(app.activityId);
+      if (act2 && String(act2.creatorId) === userId) {
+        isCreator = true;
+      }
+    } else if (app.targetType === "team") {
+      const team = await Team.findByPk(app.targetId);
+      if (team && String(team.creatorId) === userId) {
+        isCreator = true;
+      }
+    }
+    if (!isCreator) {
+      fail(ctx, "只有创建者可以处理申请");
+      return;
+    }
+
+    if (act === "approve") {
+      // 加入活动参与者
+      await ActivityParticipant.findOrCreate({
+        where: { activityId: app.activityId, userId: app.applicantId },
+        defaults: { activityId: app.activityId, userId: app.applicantId },
+      });
+      // 如果是团队申请，直接加入团队
+      if (app.targetType === "team" && app.targetId) {
+        await TeamMember.findOrCreate({
+          where: { teamId: app.targetId, userId: app.applicantId },
+          defaults: { teamId: app.targetId, userId: app.applicantId },
+        });
+      }
+      app.status = "approved";
+    } else {
+      app.status = "rejected";
+    }
+    await app.save();
+    ctx.body = {};
   });
 }
 
