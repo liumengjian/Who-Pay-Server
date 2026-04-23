@@ -403,13 +403,19 @@ async function ensureSchema() {
 
   // applications 表：不存在则创建，存在则补列
   try {
-    let appCols;
+    let appCols = {};
     try {
       appCols = await qi.describeTable("applications");
     } catch (descErr) {
-      const code = descErr && descErr.original && descErr.original.code;
-      if (code === "ER_NO_SUCH_TABLE") {
-        // 表不存在，先创建
+      // 表不存在时走建表；其他错误继续尝试建表兜底
+      console.warn("[db] describeTable applications 失败，尝试建表:", descErr && descErr.message);
+    }
+
+    // describeTable 返回空对象 {} 表示表不存在或无列，同样走建表逻辑
+    const tableExists = appCols && Object.keys(appCols).length > 0;
+
+    if (!tableExists) {
+      try {
         await sequelize.query(`
           CREATE TABLE IF NOT EXISTS \`applications\` (
             \`id\` INT AUTO_INCREMENT PRIMARY KEY,
@@ -424,98 +430,42 @@ async function ensureSchema() {
           ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         `);
         console.log("[db] 已建表 applications");
-        appCols = {};
-      } else {
-        throw descErr;
+        appCols = await qi.describeTable("applications");
+      } catch (createErr) {
+        const c = createErr && createErr.original && createErr.original.code;
+        if (c === "ER_TABLE_EXISTS_ERROR") {
+          // 表存在但列不全，重新读取
+          appCols = await qi.describeTable("applications");
+        } else {
+          console.error("[db] 建表 applications 失败:", createErr && createErr.message);
+          appCols = {};
+        }
       }
     }
-    if (!appCols.activityId) {
+
+    // 逐列补充（每步独立 try/catch，任一失败不阻断后续列）
+    const addIfMissing = async (col, opts) => {
+      if (appCols[col]) return;
       try {
-        await qi.addColumn("applications", "activityId", {
-          type: DataTypes.INTEGER,
-          allowNull: false,
-          defaultValue: 0,
-        });
-        console.log("[db] 已补充列 applications.activityId");
+        await qi.addColumn("applications", col, opts);
+        console.log(`[db] 已补充列 applications.${col}`);
+        appCols[col] = true; // 标记已补
       } catch (addErr) {
         const code = addErr && addErr.original && addErr.original.code;
-        if (code !== "ER_DUP_FIELDNAME") throw addErr;
+        if (code !== "ER_DUP_FIELDNAME") {
+          console.warn(`[db] 补充列 applications.${col} 失败:`, addErr && addErr.message);
+        }
       }
-    }
-    appCols = await qi.describeTable("applications");
-    if (!appCols.targetType) {
-      try {
-        await qi.addColumn("applications", "targetType", {
-          type: DataTypes.ENUM("activity", "team"),
-          allowNull: false,
-          defaultValue: "activity",
-        });
-        console.log("[db] 已补充列 applications.targetType");
-      } catch (addErr) {
-        const code = addErr && addErr.original && addErr.original.code;
-        if (code !== "ER_DUP_FIELDNAME") throw addErr;
-      }
-    }
-    appCols = await qi.describeTable("applications");
-    if (!appCols.targetId) {
-      try {
-        await qi.addColumn("applications", "targetId", {
-          type: DataTypes.INTEGER,
-          allowNull: true,
-        });
-        console.log("[db] 已补充列 applications.targetId");
-      } catch (addErr) {
-        const code = addErr && addErr.original && addErr.original.code;
-        if (code !== "ER_DUP_FIELDNAME") throw addErr;
-      }
-    }
-    appCols = await qi.describeTable("applications");
-    if (!appCols.applicantId) {
-      try {
-        await qi.addColumn("applications", "applicantId", {
-          type: DataTypes.STRING(32),
-          allowNull: false,
-        });
-        console.log("[db] 已补充列 applications.applicantId");
-      } catch (addErr) {
-        const code = addErr && addErr.original && addErr.original.code;
-        if (code !== "ER_DUP_FIELDNAME") throw addErr;
-      }
-    }
-    appCols = await qi.describeTable("applications");
-    if (!appCols.status) {
-      try {
-        await qi.addColumn("applications", "status", {
-          type: DataTypes.ENUM("pending", "approved", "rejected"),
-          allowNull: false,
-          defaultValue: "pending",
-        });
-        console.log("[db] 已补充列 applications.status");
-      } catch (addErr) {
-        const code = addErr && addErr.original && addErr.original.code;
-        if (code !== "ER_DUP_FIELDNAME") throw addErr;
-      }
-    }
-    appCols = await qi.describeTable("applications");
-    if (!appCols.createTime) {
-      try {
-        await qi.addColumn("applications", "createTime", {
-          type: DataTypes.DATE,
-          allowNull: false,
-          defaultValue: DataTypes.NOW,
-        });
-        console.log("[db] 已补充列 applications.createTime");
-      } catch (addErr) {
-        const code = addErr && addErr.original && addErr.original.code;
-        if (code !== "ER_DUP_FIELDNAME") throw addErr;
-      }
-    }
+    };
+
+    await addIfMissing("activityId", { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 });
+    await addIfMissing("targetType", { type: DataTypes.ENUM("activity", "team"), allowNull: false, defaultValue: "activity" });
+    await addIfMissing("targetId", { type: DataTypes.INTEGER, allowNull: true });
+    await addIfMissing("applicantId", { type: DataTypes.STRING(32), allowNull: false });
+    await addIfMissing("status", { type: DataTypes.ENUM("pending", "approved", "rejected"), allowNull: false, defaultValue: "pending" });
+    await addIfMissing("createTime", { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW });
   } catch (e) {
-    if (e && e.original && e.original.code === "ER_NO_SUCH_TABLE") {
-      /* 表不存在时忽略，创建由 Migration/SQL 完成 */
-    } else {
-      console.error("[db] ensureSchema applications:", e.message);
-    }
+    console.error("[db] ensureSchema applications:", e && e.message);
   }
 
   try {
