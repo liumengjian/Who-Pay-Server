@@ -1104,18 +1104,33 @@ function registerApiRoutes(router) {
     }
     const userId = String(ctx.state.userId);
 
-    // 检查是否已是参与者
-    const already = await ActivityParticipant.findOne({
-      where: { activityId: aid, userId },
-    });
-    if (already) {
-      fail(ctx, "您已是活动成员，无需申请");
-      return;
+    if (type === "activity") {
+      // 申请加入活动：不能已是活动参与者
+      const already = await ActivityParticipant.findOne({
+        where: { activityId: aid, userId },
+      });
+      if (already) {
+        fail(ctx, "您已是活动成员，无需申请");
+        return;
+      }
+    } else {
+      // 申请加入团队：必须已是活动参与者，且不在该活动的任何团队中
+      const already = await ActivityParticipant.findOne({
+        where: { activityId: aid, userId },
+      });
+      if (!already) {
+        fail(ctx, "请先加入该活动");
+        return;
+      }
+      if (await userTeamIdForActivity(userId, aid)) {
+        fail(ctx, "您已在某个团队中，无法再申请加入团队");
+        return;
+      }
     }
 
-    // 检查是否有待处理申请
+    // 检查是否有待处理申请（同一活动、同类型）
     const existing = await Application.findOne({
-      where: { activityId: aid, applicantId: userId, status: "pending" },
+      where: { activityId: aid, targetType: type, applicantId: userId, status: "pending" },
     });
     if (existing) {
       fail(ctx, "您已有待处理的申请");
@@ -1250,6 +1265,63 @@ function registerApiRoutes(router) {
       app.status = "rejected";
     }
     await app.save();
+    ctx.body = {};
+  });
+
+  /** 查询当前用户发出的申请列表（申请人视角） */
+  router.get("/api/application/my", auth, async (ctx) => {
+    const userId = String(ctx.state.userId);
+    const list = await Application.findAll({
+      where: { applicantId: userId },
+      order: [["createTime", "DESC"]],
+    });
+    const out = [];
+    for (const app of list) {
+      let targetName = "";
+      if (app.targetType === "activity") {
+        const act = await Activity.findByPk(app.activityId);
+        targetName = act ? act.name : "";
+      } else {
+        const team = await Team.findByPk(app.targetId);
+        targetName = team ? team.name : "";
+      }
+      const pl = app.get({ plain: true });
+      out.push({
+        _id: String(pl.id),
+        id: String(pl.id),
+        activityId: String(pl.activityId),
+        targetType: pl.targetType,
+        targetId: pl.targetId ? String(pl.targetId) : "",
+        targetName,
+        status: pl.status,
+        createTime: pl.createTime,
+      });
+    }
+    ctx.body = { applications: out };
+  });
+
+  /** 撤销申请（仅申请人本人可撤销 pending 状态的申请） */
+  router.post("/api/application/cancel", auth, async (ctx) => {
+    const { applicationId } = ctx.request.body || {};
+    const aid = parseInt(applicationId, 10);
+    if (Number.isNaN(aid)) {
+      fail(ctx, "申请ID无效");
+      return;
+    }
+    const app = await Application.findByPk(aid);
+    if (!app) {
+      fail(ctx, "申请不存在");
+      return;
+    }
+    if (String(app.applicantId) !== String(ctx.state.userId)) {
+      fail(ctx, "无权撤销他人申请");
+      return;
+    }
+    if (app.status !== "pending") {
+      fail(ctx, "只有待处理的申请可以撤销");
+      return;
+    }
+    await app.destroy();
     ctx.body = {};
   });
 }
