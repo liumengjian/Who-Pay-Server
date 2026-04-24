@@ -487,6 +487,21 @@ async function ensureSchema() {
   } catch (e) {
     console.error("[db] ensureSchema users.password:", e.message);
   }
+
+  // 扩展 applications.status ENUM，支持 cancelled 状态
+  try {
+    await sequelize.query(`
+      ALTER TABLE \`applications\` MODIFY COLUMN \`status\`
+        ENUM('pending', 'approved', 'rejected', 'cancelled')
+        NOT NULL DEFAULT 'pending'
+    `);
+    console.log("[db] 已扩展 applications.status ENUM 为 pending/approved/rejected/cancelled");
+  } catch (e) {
+    const c = e && e.original && e.original.code;
+    if (c !== "ER_INVALID_ENUM_VALUE") {
+      console.warn("[db] ensureSchema applications.status ENUM:", e && e.message);
+    }
+  }
 }
 
 /**
