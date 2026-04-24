@@ -1320,7 +1320,7 @@ function registerApiRoutes(router) {
       fail(ctx, "只有待处理的申请可以撤销");
       return;
     }
-    await app.destroy();
+    await app.update({ status: "cancelled" });
     ctx.body = {};
   });
 }
